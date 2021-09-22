@@ -13,7 +13,9 @@
 //
 #include <list>
 #include <vector>
+#include <memory>
 #include <stdint.h>
+#include <assert.h>
 #include <LxS_Lib/LxS_Def.h>
 #include <LxS_Lib/LxS_Param.h>
 #include <LxS_Lib/LxS_Serialization.h>
@@ -47,10 +49,11 @@ namespace LxS
             uint16_t    type;       
             std::vector<uint16_t>      data;     //!< data-pointer to values
 
-            Datagram() : Serializable() {}
-            Datagram(eCmd cmd) : Serializable(), resp(true), cmd(cmd), pkt_num(0), 
+            Datagram() : Serializable(), resp(false), cmd(LXS_CMD_GET_ERROR_TEXT), dt(LXS_DATA_UNKNOWN), pkt_num(0), 
+                trans_num(0), status(0), encoder(0), scan_num(0), type(0x0010) {}
+            Datagram(eCmd cmd) : Serializable(), resp(true), cmd(cmd), dt(LXS_DATA_UNKNOWN), pkt_num(0), 
                 trans_num(cmd), status(0), encoder(0), scan_num(0), type(0x0010) {}
-            Datagram(eCmd cmd, uint16_t pkt_num) : Serializable(), resp(false), cmd(cmd), pkt_num(pkt_num), 
+            Datagram(eCmd cmd, uint16_t pkt_num) : Serializable(), resp(false), cmd(cmd), dt(LXS_DATA_UNKNOWN), pkt_num(pkt_num), 
                 trans_num(0), status(0), encoder(0), scan_num(0), type(0x0010) {}
 
             ~Datagram() {}
@@ -64,8 +67,8 @@ namespace LxS
 
 
             void dump() const {
-                printf("Cmd %d DT %d pkt# %d trans# %d status %04X encoder %d scan# %d type %04X len %d\n",
-                        int(cmd),int(dt),int(pkt_num),int(trans_num),int(status),int(encoder),int(scan_num),int(type),int(data.size()));
+                printf("Cmd %04X (%s) DT %04X (%s) pkt# %d trans# %04X (%s) status %04X encoder %d scan# %d type %04X len %d\n",
+                        int(cmd),eCmdString(cmd),int(dt),eDataString(dt),int(pkt_num),int(trans_num),eCmdString(trans_num),int(status),int(encoder),int(scan_num),int(type),int(data.size()));
                 for (size_t i=0;i<data.size();i++) {
                     printf("%04X ",int(data[i]));
                 }
@@ -153,6 +156,10 @@ namespace LxS
 
     };
 
+    typedef std::shared_ptr<Datagram> DatagramPtr;
+
+    DatagramPtr convertToInheritedDatagram(const Datagram & dg);
+
     class CmdConnectToSensor : public Datagram {
         public:
             typedef enum {HICONNECT_OFF,HICONNECT_STD,HICONNECT_ON} ConnectMode;
@@ -196,6 +203,8 @@ namespace LxS
         public:
             CmdEthernetTrigger(uint16_t pkt_num) : Datagram(LXS_CMD_ETHERNET_TRIGGER,pkt_num) {
             }
+            CmdEthernetTrigger(const Datagram & dg) : Datagram(dg) {
+            }
     };
 
     class CmdEthernetActivation : public Datagram {
@@ -203,6 +212,8 @@ namespace LxS
             CmdEthernetActivation(bool activation, uint16_t pkt_num) : Datagram(LXS_CMD_ETHERNET_ACTIVATION,pkt_num) {
                 data.resize(1);
                 data[0] = activation?1:0;
+            }
+            CmdEthernetActivation(const Datagram & dg) : Datagram(dg) {
             }
     };
 
@@ -402,7 +413,7 @@ namespace LxS
             // Not parsed
         public:
             RespSupportedParameters(const Datagram & dg) : Datagram(dg) {
-                assert(dg.cmd == LXS_CMD_GET_SUPPORTED_PARAMETERS+1);
+                assert(dg.cmd == LXS_RESP_GET_SUPPORTED_PARAMETERS);
                 assert(data.size()>0);
             }
     };
@@ -412,7 +423,7 @@ namespace LxS
             // ParamSet params;
         public:
             RespParameterSet(const Datagram & dg) : Datagram(dg) {
-                assert(dg.cmd == LXS_CMD_GET_PARAMETER_SET+1);
+                assert(dg.cmd == LXS_RESP_GET_PARAMETER_SET);
                 assert(data.size()>0);
             }
     };
@@ -449,7 +460,7 @@ namespace LxS
                 assert(dg.cmd == LXS_RESP_X_COORDINATES);
                 x.resize(data.size());
                 for (size_t i=0;i<data.size();i++) {
-                    x[i] = data[i]/1000.0;
+                    x[i] = ((int16_t)data[i])*1e-4;
                 }
             }
 
@@ -462,11 +473,12 @@ namespace LxS
         protected:
             std::vector<float> x;
         public:
+            RespDataX() {}
             RespDataX(const Datagram & dg) : Datagram(dg) {
                 assert(dg.cmd == LXS_RESP_DATA_X);
                 x.resize(data.size());
                 for (size_t i=0;i<data.size();i++) {
-                    x[i] = data[i]/1000.0;
+                    x[i] = ((int16_t)data[i])*1e-4;
                 }
             }
 
@@ -485,7 +497,7 @@ namespace LxS
                 assert(dg.cmd == LXS_RESP_Z_COORDINATES);
                 z.resize(data.size());
                 for (size_t i=0;i<data.size();i++) {
-                    z[i] = data[i]/1000.0;
+                    z[i] = data[i]*1e-4;
                 }
             }
 
@@ -499,11 +511,12 @@ namespace LxS
         protected:
             std::vector<float> z;
         public:
+            RespDataZ() {}
             RespDataZ(const Datagram & dg) : Datagram(dg) {
                 assert(dg.cmd == LXS_RESP_DATA_Z);
                 z.resize(data.size());
                 for (size_t i=0;i<data.size();i++) {
-                    z[i] = data[i]/1000.0;
+                    z[i] = data[i]*1e-4;
                 }
             }
 
@@ -518,14 +531,15 @@ namespace LxS
             std::vector<float> x;
             std::vector<float> z;
         public:
+            RespZXCoordinates() {}
             RespZXCoordinates(const Datagram & dg) : Datagram(dg) {
                 assert(dg.cmd == LXS_RESP_Z_COORDINATES);
                 x.resize(data.size()/2);
                 z.resize(data.size()/2);
                 for (size_t i=0;i<data.size()/2;i++) {
                     // Very uncertain...
-                    z[i] = data[i*2+0]/1e-5;
-                    x[i] = data[i*2+1]/1e-5;
+                    z[i] = data[i*2+0]*1e-5;
+                    x[i] = ((int16_t)data[i*2+1])*1e-5;
                 }
             }
 

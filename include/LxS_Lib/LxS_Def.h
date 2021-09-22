@@ -52,6 +52,8 @@ namespace LxS
         LXS_DATA_ZX       = 3,    //!< package with ZX-Data
         LXS_DATA_FIELD    = 4,    //!< package with LxS-Informations
     } eData;
+    const char * eDataString(uint16_t data);
+    const char * eDataString(eData data);
 
     //---------------------------------------------------------------------------------------------------------------------
     /**
@@ -60,6 +62,7 @@ namespace LxS
       */
     typedef enum
     {
+        LXS_CMD_UNSET                                 = 0x0000,  
         LXS_CMD_SET_LASER_GATE                        = 0x0001,   //!< Turns the laser on / off
         LXS_CMD_TRIGGER_SINGLE_MEASUREMENT            = 0x0003,   //!< Tiggers a single measurement
         LXS_CMD_GET_X_COORDINATES                     = 0x0011,   //!< Reads the X coordinates after single trigger
@@ -68,7 +71,9 @@ namespace LxS
         LXS_RESP_Z_COORDINATES                        = 0x0014,   //!< Response telegram of GET_Z_COORDINATES. Contains Z- profile data.
         LXS_CMD_SET_ENCODER_VALUE                     = 0x0029,   //!< Set encoder value
         LXS_CMD_GET_SUPPORTED_PARAMETERS              = 0x0043,   //!< Get the structure of the supported parameters
+        LXS_RESP_GET_SUPPORTED_PARAMETERS             = 0x0044,   //!< Get the structure of the supported parameters
         LXS_CMD_GET_PARAMETER_SET                     = 0x0045,   //!< Get parameter values of a parameter set
+        LXS_RESP_GET_PARAMETER_SET                    = 0x0046,   //!< Get parameter values of a parameter set
         LXS_CMD_SET_PARAMETER_SET                     = 0x0047,   //!< Set values of a parameter set
         LXS_CMD_GET_INSPECTION_TASK                   = 0x0049,   //!< Get number of the actual inspection task.
         LXS_CMD_SET_INSPECTION_TASK                   = 0x004B,   //!< Set actual inspection task
@@ -103,6 +108,10 @@ namespace LxS
         LXS_RESP_DATA_Z                               = 0x5A5A,   //!< Z-coordinate data
     } eCmd;
 
+    const char * eCmdString(uint16_t cmd);
+    const char * eCmdString(eCmd cmd);
+    eCmd eCmdResponse(eCmd cmd);
+
     //---------------------------------------------------------------------------------------------------------------------
     /**
       @enum       eMode
@@ -117,6 +126,8 @@ namespace LxS
         LXS_MODE_ERROR    = 0x80,   //!< Error mode
     } eMode;
 
+    const char * eModeString(uint16_t mode);
+    const char * eModeString(eMode mode);
     //---------------------------------------------------------------------------------------------------------------------
     /**
       @enum       eType
@@ -141,6 +152,9 @@ namespace LxS
         LXS_TYPE_LPS_36_30      = 50114750,		//!< LPS 36.30 with polfilter
         LXS_TYPE_LRS_36_6_10    = 50115418,		//!< LRS 36/6.10 with plastic window
     } eType;
+
+    const char * eTypeString(uint16_t type);
+    const char * eTypeString(eType type);
 
     //---------------------------------------------------------------------------------------------------------------------
     /**
