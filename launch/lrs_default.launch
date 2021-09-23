@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+
+<launch>
+    <node name="lrs36" pkg="ros_lxs_driver" type="ros_lxs_driver" >
+        <param name="base_frame" value="lrs36"/>
+        <param name="sensor_host" value="192.168.60.3"/>
+        <param name="sensor_port" value="9008"/>
+        <param name="host_port" value="5634"/>
+        <param name="wait_timeout" value="0.5"/>
+    </node>
+
+</launch>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+
+<launch>
+    <node name="lrs36_1" pkg="ros_lxs_driver" type="ros_lxs_driver" >
+        <param name="base_frame" value="lrs36_1"/>
+        <param name="sensor_host" value="192.168.60.3"/>
+        <param name="sensor_port" value="9008"/>
+        <param name="host_port" value="5634"/>
+        <param name="wait_timeout" value="0.5"/>
+    </node>
+
+    <node name="lrs36_2" pkg="ros_lxs_driver" type="ros_lxs_driver" >
+        <param name="base_frame" value="lrs36_2"/>
+        <param name="sensor_host" value="192.168.60.4"/>
+        <param name="sensor_port" value="9008"/>
+        <param name="host_port" value="5635"/>
+        <param name="wait_timeout" value="0.5"/>
+    </node>
+
+    <node name="lrs36_3" pkg="ros_lxs_driver" type="ros_lxs_driver" >
+        <param name="base_frame" value="lrs36_3"/>
+        <param name="sensor_host" value="192.168.60.5"/>
+        <param name="sensor_port" value="9008"/>
+        <param name="host_port" value="5636"/>
+        <param name="wait_timeout" value="0.5"/>
+    </node>
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="lrs36_1_broadcaster" 
+        args="0 0 0 0 1.57 0 cubeur_base lrs36_1" />
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="lrs36_2_broadcaster" 
+        args="0 0 0.5 0 1.57 0 cubeur_base lrs36_2" />
+
+    <node pkg="tf2_ros" type="static_transform_publisher" name="lrs36_3_broadcaster" 
+        args="0 0 1 0 1.57 0 cubeur_base lrs36_3" />
+
+</launch>

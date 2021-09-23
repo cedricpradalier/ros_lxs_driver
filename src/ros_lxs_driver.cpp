@@ -3,6 +3,10 @@
 #include <pthread.h>
 #include <iostream>
 #include <set>
+#include <atomic>
+#include <condition_variable>
+#include <thread>
+#include <chrono>
 #include <boost/array.hpp>
 #include <boost/asio.hpp>
 
@@ -21,8 +25,11 @@ class LxSDriver {
     protected:
         bool connected;
         ros::Publisher scan_pub;
-        std::string host_name;
+        std::string sensor_host;
+        std::string sensor_port;
+        int host_port;
         std::string base_frame;
+        double wait_timeout;
         static boost::asio::io_service io_service;
 
         template <class iterator> 
@@ -34,21 +41,24 @@ class LxSDriver {
                 printf("\n");
             }
 
-        pthread_mutex_t waitingListMtx = PTHREAD_MUTEX_INITIALIZER;
-        pthread_cond_t waitingListCond = PTHREAD_COND_INITIALIZER;
+        // pthread_mutex_t waitingListMtx = PTHREAD_MUTEX_INITIALIZER;
+        // pthread_cond_t waitingListCond = PTHREAD_COND_INITIALIZER;
         std::set<eCmd> waitingList;
         LxS::DatagramPtr response;
 
+        std::thread* receiveThread;
+        std::condition_variable receiveCond;
+        std::mutex receiveMtx;
+
         template <class datagram>
             void handleCmdDatagram(const datagram & dg) {
-                pthread_mutex_lock(&waitingListMtx);
+                std::unique_lock<std::mutex> lk(receiveMtx);
                 std::set<eCmd>::iterator it = waitingList.find(dg.cmd);
                 if (it != waitingList.end()) {
                     response = convertToInheritedDatagram(dg);
                     waitingList.clear();
-                    pthread_cond_signal(&waitingListCond);
+                    receiveCond.notify_all();
                 }
-                pthread_mutex_unlock(&waitingListMtx);
             }
 
         void publishPointCloud(const RespDataX & dx, const RespDataZ & dz) {
@@ -87,14 +97,14 @@ class LxSDriver {
             scan_pub.publish(msg);
         }
 
-        static void * recv_thread(void * dummy) {
-            LxSDriver *that = (LxSDriver*)dummy;
-            udp::socket socket(io_service, udp::endpoint(udp::v4(), 5634));
+        void recv_thread() {
+            ROS_INFO("Listening on port %d",host_port);
+            udp::socket socket(io_service, udp::endpoint(udp::v4(), host_port));
             uint8_t axis = 0;
             RespDataX dx;
             RespDataZ dz;
             RespZXCoordinates dxz;
-            while (true) {
+            while (ros::ok()) {
                 boost::array<uint8_t, 1024> recv_buf;
                 udp::endpoint sender_endpoint;
                 int len = socket.receive_from(
@@ -111,7 +121,7 @@ class LxSDriver {
                                 dz = RespDataZ(dg);
                                 axis |= 1;
                                 if (axis == 3) {
-                                    that->publishPointCloud(dx,dz);
+                                    publishPointCloud(dx,dz);
                                     axis = 0;
                                 }
                             }
@@ -122,7 +132,7 @@ class LxSDriver {
                                 dx = RespDataX(dg);
                                 axis |= 2;
                                 if (axis == 3) {
-                                    that->publishPointCloud(dx,dz);
+                                    publishPointCloud(dx,dz);
                                     axis = 0;
                                 }
                             }
@@ -131,14 +141,14 @@ class LxSDriver {
                             {
                                 // printf("I");fflush(stdout);
                                 dxz = RespZXCoordinates(dg);
-                                that->publishPointCloud(dxz);
+                                publishPointCloud(dxz);
                             }
                             break;
                         default:
                             printf("\nRecv: ");
                             dg.dump();
-                            that->dump_buf(recv_buf.begin(),recv_buf.begin()+len);
-                            that->handleCmdDatagram(dg);
+                            dump_buf(recv_buf.begin(),recv_buf.begin()+len);
+                            handleCmdDatagram(dg);
 
                             break;
                     }
@@ -146,7 +156,6 @@ class LxSDriver {
                     usleep(1000);
                 }
             }
-            return NULL;
         }
 
         template <class datagram>
@@ -171,18 +180,23 @@ class LxSDriver {
 #endif
                 eCmd resp_cmd = eCmdResponse(dg.cmd);
 
-                pthread_mutex_lock(&waitingListMtx);
+                std::unique_lock<std::mutex> lk(receiveMtx);
                 waitingList.insert(LxS::LXS_RESP_ACK_FAILURE);
                 waitingList.insert(resp_cmd);
                 socket.send_to(boost::asio::buffer(send_buf), ep);
-                pthread_cond_wait(&waitingListCond,&waitingListMtx);
+                std::chrono::duration<double> timeout(wait_timeout);
+                std::cv_status wstatus = receiveCond.wait_for(lk, timeout);
                 bool res = false;
-                if (response) {
+                if (wstatus == std::cv_status::timeout) {
+                    ROS_ERROR("Timeout while waiting for answer to %04X (%s)",uint16_t(dg.cmd),eCmdString(dg.cmd));
+                    res = false;
+                } else if (response) {
                     switch (response->cmd) {
                         case LXS_RESP_ACK_SUCCESS:
                             res = true;
                             break;
                         case LXS_RESP_ACK_FAILURE:
+                            ROS_ERROR("Failure as answer to %04X (%s): %04X",uint16_t(dg.cmd),eCmdString(dg.cmd),dg.status);
                             res = false;
                             break;
                         default:
@@ -191,28 +205,29 @@ class LxSDriver {
                     }
                 }
                 response.reset();
-                pthread_mutex_unlock(&waitingListMtx);
                 return res;
             }
 
     public: 
        LxSDriver(ros::NodeHandle & nh) {
            connected = false;
-            nh.param("base_frame",base_frame,std::string("lpr36"));
-            nh.param("host_name",host_name,std::string("192.168.60.3"));
+            nh.param("base_frame",base_frame,std::string("lrs36"));
+            nh.param("sensor_host",sensor_host,std::string("192.168.60.3"));
+            nh.param("sensor_port",sensor_port,std::string("9008"));
+            nh.param("host_port",host_port,5634);
+            nh.param("wait_timeout",wait_timeout,0.5);
             scan_pub = nh.advertise<sensor_msgs::PointCloud2>("scans",1);
        }
 
        void run() {
            udp::resolver resolver(io_service);
-           udp::resolver::query query(udp::v4(), host_name, "9008");
+           udp::resolver::query query(udp::v4(), sensor_host,sensor_port);
            udp::endpoint receiver_endpoint = *resolver.resolve(query);
 
            udp::socket socket(io_service);
            socket.open(udp::v4());
 
-           pthread_t tid;
-           pthread_create(&tid,NULL,LxSDriver::recv_thread,this);
+           receiveThread = new std::thread(&LxSDriver::recv_thread,this);
 
            unsigned int pkt_num = 1;
            bool res = false;
@@ -221,7 +236,7 @@ class LxSDriver {
 
            try {
                while (!connected && ros::ok()) {
-                   ROS_INFO("Connecting to %s",host_name.c_str());
+                   ROS_INFO("Connecting to %s:%s",sensor_host.c_str(),sensor_port.c_str());
                    CmdConnectToSensor connect(pkt_num++);
                    res = send_and_wait(connect,socket,receiver_endpoint);
                    if (res) {
@@ -240,6 +255,9 @@ class LxSDriver {
            } catch (std::exception& e) {
                ROS_ERROR("Exception %s",e.what());
            }
+
+           delete receiveThread;
+           receiveThread = NULL;
        }
 
 };
