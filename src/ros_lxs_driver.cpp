@@ -30,10 +30,13 @@ class LxSDriver {
         int host_port;
         std::string base_frame;
         double wait_timeout;
+        bool trigger_input;
+        bool cascade_output;
         static boost::asio::io_service io_service;
 
         template <class iterator> 
-            void dump_buf(iterator begin, const iterator & end) {
+            void dump_buf(iterator begin, const iterator & end, const std::string & prefix) {
+                printf("%s ",prefix.c_str());
                 while (begin != end) {
                     printf("%02X ",*begin);
                     begin ++;
@@ -98,7 +101,7 @@ class LxSDriver {
         }
 
         void recv_thread() {
-            ROS_INFO("Listening on port %d",host_port);
+            ROS_INFO("%s: Listening on port %d",sensor_host.c_str(),host_port);
             udp::socket socket(io_service, udp::endpoint(udp::v4(), host_port));
             uint8_t axis = 0;
             RespDataX dx;
@@ -145,9 +148,9 @@ class LxSDriver {
                             }
                             break;
                         default:
-                            printf("\nRecv: ");
+                            printf("\n%s Recv: ",sensor_host.c_str());
                             dg.dump();
-                            dump_buf(recv_buf.begin(),recv_buf.begin()+len);
+                            dump_buf(recv_buf.begin(),recv_buf.begin()+len,"");
                             handleCmdDatagram(dg);
 
                             break;
@@ -164,7 +167,7 @@ class LxSDriver {
                 dg.serialize(send_buf.begin(),send_buf.end());
 #if 1
                 dg.dump();
-                dump_buf(send_buf.begin(),send_buf.end());
+                dump_buf(send_buf.begin(),send_buf.end(),sensor_host);
 #endif
 
                 return socket.send_to(boost::asio::buffer(send_buf), ep);
@@ -176,7 +179,7 @@ class LxSDriver {
                 dg.serialize(send_buf.begin(),send_buf.end());
 #if 1
                 dg.dump();
-                dump_buf(send_buf.begin(),send_buf.end());
+                dump_buf(send_buf.begin(),send_buf.end(),sensor_host);
 #endif
                 eCmd resp_cmd = eCmdResponse(dg.cmd);
 
@@ -188,7 +191,7 @@ class LxSDriver {
                 std::cv_status wstatus = receiveCond.wait_for(lk, timeout);
                 bool res = false;
                 if (wstatus == std::cv_status::timeout) {
-                    ROS_ERROR("Timeout while waiting for answer to %04X (%s)",uint16_t(dg.cmd),eCmdString(dg.cmd));
+                    ROS_ERROR("%s: Timeout while waiting for answer to %04X (%s)",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd));
                     res = false;
                 } else if (response) {
                     switch (response->cmd) {
@@ -196,7 +199,7 @@ class LxSDriver {
                             res = true;
                             break;
                         case LXS_RESP_ACK_FAILURE:
-                            ROS_ERROR("Failure as answer to %04X (%s): %04X",uint16_t(dg.cmd),eCmdString(dg.cmd),dg.status);
+                            ROS_ERROR("%s: Failure as answer to %04X (%s): %04X",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd),dg.status);
                             res = false;
                             break;
                         default:
@@ -204,7 +207,6 @@ class LxSDriver {
                             break;
                     }
                 }
-                response.reset();
                 return res;
             }
 
@@ -216,6 +218,8 @@ class LxSDriver {
             nh.param("sensor_port",sensor_port,std::string("9008"));
             nh.param("host_port",host_port,5634);
             nh.param("wait_timeout",wait_timeout,0.5);
+            nh.param("trigger_input",trigger_input,false);
+            nh.param("cascade_output",cascade_output,false);
             scan_pub = nh.advertise<sensor_msgs::PointCloud2>("scans",1);
        }
 
@@ -241,19 +245,60 @@ class LxSDriver {
                    res = send_and_wait(connect,socket,receiver_endpoint);
                    if (res) {
                        connected = true;
-                       ROS_INFO("Connected");
+                       ROS_INFO("Connected to %s",sensor_host.c_str());
                        break;
                    }
                    CmdDisconnectFromSensor disconnect(pkt_num++);
                    res = send_and_wait(disconnect,socket,receiver_endpoint);
                    ros::Duration(1).sleep();
                }
+               CmdEnterCommandMode enter(pkt_num++);
+               res = send_and_wait(enter,socket,receiver_endpoint);
+               if (res) {
+                   ROS_INFO("%s: Entered command mode",sensor_host.c_str());
+               }
+               CmdGetSingleTaskParameter getTrigger(0xBBBA,pkt_num++);
+               res = send_and_wait(getTrigger,socket,receiver_endpoint);
+               if (res) {
+                   assert(response && (response->cmd == LXS_RESP_TASK_PARAMETER));
+                   std::shared_ptr<RespTaskParameter> resp = std::dynamic_pointer_cast<RespTaskParameter>(response);
+                   if (bool(resp->getParam().data[0]) != trigger_input) {
+                       CmdSetSingleTaskParameter setTrigger(0xBBBA,trigger_input?1:0,true,pkt_num++);
+                       res = send_and_wait(setTrigger,socket,receiver_endpoint);
+                       if (res) {
+                           ROS_INFO("%s: Set triggered mode: %d",sensor_host.c_str(),int(trigger_input));
+                       }
+                   } else {
+                       ROS_INFO("%s: triggered mode already set: %d",sensor_host.c_str(),int(trigger_input));
+                   }
+               }
+               CmdGetSingleTaskParameter getCascade(0xBBBC,pkt_num++);
+               res = send_and_wait(getCascade,socket,receiver_endpoint);
+               if (res) {
+                   assert(response && (response->cmd == LXS_RESP_TASK_PARAMETER));
+                   std::shared_ptr<RespTaskParameter> resp = std::dynamic_pointer_cast<RespTaskParameter>(response);
+                   if (bool(resp->getParam().data[0]) != trigger_input) {
+                       CmdSetSingleTaskParameter setCascade(0xBBBC,cascade_output?1:0,true,pkt_num++);
+                       res = send_and_wait(setCascade,socket,receiver_endpoint);
+                       if (res) {
+                           ROS_INFO("%s: Set cascade output: %d",sensor_host.c_str(),int(cascade_output));
+                       }
+                   } else {
+                       ROS_INFO("%s: cascade mode already set: %d",sensor_host.c_str(),int(trigger_input));
+                   }
+               }
+               CmdExitCommandMode exit(pkt_num++);
+               res = send_and_wait(exit,socket,receiver_endpoint);
+               if (res) {
+                   ROS_INFO("%s: Exited command mode",sensor_host.c_str());
+               }
+
                ros::spin();
                CmdDisconnectFromSensor disconnect(pkt_num++);
                res = send_and_wait(disconnect,socket,receiver_endpoint);
                ROS_INFO("Disconnected");
            } catch (std::exception& e) {
-               ROS_ERROR("Exception %s",e.what());
+               ROS_ERROR("%s: Exception %s",sensor_host.c_str(),e.what());
            }
 
            delete receiveThread;

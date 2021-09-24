@@ -56,7 +56,7 @@ namespace LxS
             Datagram(eCmd cmd, uint16_t pkt_num) : Serializable(), resp(false), cmd(cmd), dt(LXS_DATA_UNKNOWN), pkt_num(pkt_num), 
                 trans_num(0), status(0), encoder(0), scan_num(0), type(0x0010) {}
 
-            ~Datagram() {}
+            virtual ~Datagram() {}
 
 
             eMode mode() const {return ((eMode)(status & 0x00F0));}
@@ -408,6 +408,7 @@ namespace LxS
             }
     };
 
+
     class RespSupportedParameters : public Datagram {
         protected:
             // Not parsed
@@ -433,7 +434,7 @@ namespace LxS
             Param param;
         public:
             RespTaskParameter(const Datagram & dg) : Datagram(dg) {
-                assert(dg.cmd == LXS_RESP_USER_PARAMETER);
+                assert(dg.cmd == LXS_RESP_TASK_PARAMETER);
                 assert(data.size()>=8);
                 param.readDatagramData(data);
             }
