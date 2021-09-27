@@ -151,6 +151,7 @@ const char * LxS::eCmdString(eCmd cmd) {
         case LXS_RESP_DATA_X: return "RESP_DATA_X";                              
         case LXS_RESP_XZ_HIGH_DATA: return "RESP_XZ_HIGH_DATA";                        
         case LXS_RESP_DATA_Z: return "RESP_DATA_Z";                              
+        case LXS_RESP_GET_PARAMETER_SET: return "RESP_GET_PARAMETER_SET";                              
         case LXS_CMD_UNSET: return "";                              
         default: return "CMD_INVALID";
     } 

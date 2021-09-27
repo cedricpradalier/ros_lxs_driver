@@ -59,6 +59,19 @@ namespace LxS
             virtual ~Datagram() {}
 
 
+            void clear(eCmd c,uint16_t pkt_n=0) {
+                cmd = c;
+                resp = false;
+                pkt_num = pkt_n;
+                dt = LXS_DATA_UNKNOWN;
+                trans_num = 0;
+                status = 0;
+                encoder = 0;
+                scan_num = 0;
+                type = 0x0010;
+                data.clear();
+            }
+
             eMode mode() const {return ((eMode)(status & 0x00F0));}
             bool activation() const {return ((status & 0x0100) == 0x0100);}
             bool ethernet() const {return ((status & 0x0001) == 0x0001);}
@@ -343,6 +356,99 @@ namespace LxS
             }
     };
 
+    class RespParameterSet : public Datagram {
+        protected:
+            // ParamSet params;
+        public:
+            RespParameterSet(const Datagram & dg) : Datagram(dg) {
+                assert(dg.cmd == LXS_RESP_GET_PARAMETER_SET);
+                assert(data.size()>0);
+            }
+    };
+
+
+    class CmdSetTaskParameterSet : public Datagram {
+        public:
+            uint8_t task_id;
+            char task_name[12];
+            bool enable_trigger;
+            bool enable_activation;
+            bool enable_cascading;
+            uint8_t exposure_mode;
+            uint16_t manual_exposure;
+            int16_t x_min, x_max;
+            int16_t z_min, z_max;
+        public:
+
+            CmdSetTaskParameterSet(const RespParameterSet & resp, uint16_t pkt_num) : 
+                Datagram((const Datagram &)resp) {
+                    assert(data.size()==0x16);
+                    task_id = data[0];
+                    for (int i=0;i<12;i++) {
+                        task_name[i] = data[i+1];
+                    }
+                    enable_trigger = data[13];
+                    enable_activation = data[14];
+                    enable_cascading = data[15];
+                    exposure_mode = data[16];
+                    manual_exposure = data[17];
+                    x_min = data[18]; x_max = data[19];
+                    z_min = data[20]; z_max = data[21];
+                    clear(LXS_CMD_SET_PARAMETER_SET,pkt_num);
+                    sync();
+                }
+
+
+            CmdSetTaskParameterSet(uint16_t task_id,uint16_t pkt_num) : Datagram(LXS_CMD_SET_PARAMETER_SET,pkt_num), task_id(task_id) {
+                // Default value copied from the windows app
+                for (int i=0;i<12;i++) {
+                    task_name[i]=' ';
+                }
+                task_name[0]='T';
+                task_name[1]='a';
+                task_name[2]='s';
+                task_name[3]='k';
+                if (task_id >= 10) {
+                    task_name[5]='1';
+                }
+                task_name[6] = '0' + (task_id%10);
+                enable_trigger = false;
+                enable_activation = false;
+                enable_cascading = false;
+                exposure_mode = 4;
+                manual_exposure = 0x0663;
+                x_min = 0xf448; x_max = 0x0bb8;
+                z_min = 0x076c; z_max = 0x1fa4;
+                sync();
+            }
+
+            void sync() {
+                data.resize(0x18);
+                data[0] = task_id;
+                data[1] = 1;
+                data[2] = task_id;
+                for (int i=0;i<12;i++) {
+                    data[3+i] = task_name[i];
+                }
+                data[15] = enable_trigger?1:0;
+                data[16] = enable_activation?1:0;
+                data[17] = enable_cascading?1:0;
+                data[18] = exposure_mode;
+                data[19] = manual_exposure;
+                data[20] = x_min; data[21] = x_max;
+                data[22] = z_min; data[23] = z_max;
+            }
+
+            void print(const std::string & prefix) {
+                // dump();
+                char buffer[13];
+                for (int i=0;i<12;i++) buffer[i] = task_name[i];
+                buffer[12]=0;
+                printf("%s Task %d:%s: T%d A%d C%d E%d %d X [%d;%d] Z [%d;%d]\n",prefix.c_str(),task_id,buffer,enable_trigger?1:0,enable_activation?1:0, enable_cascading?1:0,exposure_mode,manual_exposure,x_min,x_max,z_min,z_max);
+            }
+
+    };
+
     class CmdSetParameterSet : public Datagram {
         public:
             CmdSetParameterSet(uint16_t pkt_num) : Datagram(LXS_CMD_SET_PARAMETER_SET,pkt_num) {
@@ -419,15 +525,6 @@ namespace LxS
             }
     };
 
-    class RespParameterSet : public Datagram {
-        protected:
-            // ParamSet params;
-        public:
-            RespParameterSet(const Datagram & dg) : Datagram(dg) {
-                assert(dg.cmd == LXS_RESP_GET_PARAMETER_SET);
-                assert(data.size()>0);
-            }
-    };
 
     class RespTaskParameter : public Datagram {
         protected:
