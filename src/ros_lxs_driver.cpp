@@ -181,7 +181,7 @@ class LxSDriver {
             }
 
         template <class datagram>
-            bool send_and_wait(const datagram & dg,udp::socket & socket, udp::endpoint & ep) {
+            bool send_and_wait(const datagram & dg,udp::socket & socket, udp::endpoint & ep, unsigned int num_retries=0) {
                 std::vector<uint8_t> send_buf(dg.serialized_length());
                 dg.serialize(send_buf.begin(),send_buf.end());
                 if (debug) {
@@ -190,31 +190,30 @@ class LxSDriver {
                 }
                 eCmd resp_cmd = eCmdResponse(dg.cmd);
 
-                std::unique_lock<std::mutex> lk(receiveMtx);
-                waitingList.insert(LxS::LXS_RESP_ACK_FAILURE);
-                waitingList.insert(resp_cmd);
-                socket.send_to(boost::asio::buffer(send_buf), ep);
-                std::chrono::duration<double> timeout(wait_timeout);
-                std::cv_status wstatus = receiveCond.wait_for(lk, timeout);
-                bool res = false;
-                if (wstatus == std::cv_status::timeout) {
-                    ROS_ERROR("%s: Timeout while waiting for answer to %04X (%s)",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd));
-                    res = false;
-                } else if (response) {
-                    switch (response->cmd) {
-                        case LXS_RESP_ACK_SUCCESS:
-                            res = true;
-                            break;
-                        case LXS_RESP_ACK_FAILURE:
-                            ROS_ERROR("%s: Failure as answer to %04X (%s): %04X",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd),dg.status);
-                            res = false;
-                            break;
-                        default:
-                            res = true;
-                            break;
+                int ntrials = num_retries + 1;
+                for (int i=0;i<ntrials;i++) {
+                    std::unique_lock<std::mutex> lk(receiveMtx);
+                    waitingList.insert(LxS::LXS_RESP_ACK_FAILURE);
+                    waitingList.insert(resp_cmd);
+                    socket.send_to(boost::asio::buffer(send_buf), ep);
+                    std::chrono::duration<double> timeout(wait_timeout);
+                    std::cv_status wstatus = receiveCond.wait_for(lk, timeout);
+                    waitingList.clear();
+                    bool retrying = i < (ntrials-1);
+                    if (wstatus == std::cv_status::timeout) {
+                        ROS_ERROR("%s: Timeout while waiting for answer to %04X (%s) %s",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd),retrying?" - Retrying":"");
+                    } else if (response) {
+                        switch (response->cmd) {
+                            case LXS_RESP_ACK_FAILURE:
+                                ROS_ERROR("%s: Failure as answer to %04X (%s): %04X %s",sensor_host.c_str(),uint16_t(dg.cmd),eCmdString(dg.cmd),dg.status,retrying?" - Retrying":"");
+                                break;
+                            case LXS_RESP_ACK_SUCCESS:
+                            default:
+                                return true;
+                        }
                     }
                 }
-                return res;
+                return false;
             }
 
     public: 
@@ -248,9 +247,10 @@ class LxSDriver {
 
            try {
                while (!connected && ros::ok()) {
+                   ros::spinOnce();
                    ROS_INFO("Connecting to %s:%s",sensor_host.c_str(),sensor_port.c_str());
                    CmdConnectToSensor connect(pkt_num++);
-                   res = send_and_wait(connect,socket,receiver_endpoint);
+                   res = send_and_wait(connect,socket,receiver_endpoint,4);
                    if (res) {
                        connected = true;
                        ROS_INFO("Connected to %s",sensor_host.c_str());
@@ -260,13 +260,16 @@ class LxSDriver {
                    res = send_and_wait(disconnect,socket,receiver_endpoint);
                    ros::Duration(1).sleep();
                }
+               if (!connected && !ros::ok()) {
+                   return;
+               }
                CmdEnterCommandMode enter(pkt_num++);
-               res = send_and_wait(enter,socket,receiver_endpoint);
+               res = send_and_wait(enter,socket,receiver_endpoint,4);
                if (res) {
                    ROS_INFO("%s: Entered command mode",sensor_host.c_str());
                }
                CmdGetParameterSet pget(0,pkt_num++);
-               res = send_and_wait(pget,socket,receiver_endpoint);
+               res = send_and_wait(pget,socket,receiver_endpoint,4);
                if (res) {
                    assert(response && (response->cmd == LXS_RESP_GET_PARAMETER_SET));
                    std::shared_ptr<RespParameterSet> resp = std::dynamic_pointer_cast<RespParameterSet>(response);
@@ -275,19 +278,19 @@ class LxSDriver {
                    pset.enable_cascading = cascade_output;
                    pset.print(sensor_host);
                    pset.sync();
-                   res = send_and_wait(pset,socket,receiver_endpoint);
+                   res = send_and_wait(pset,socket,receiver_endpoint,4);
                }
                CmdSetInspectionTask sit(0,true,pkt_num++);
-               res = send_and_wait(sit,socket,receiver_endpoint);
+               res = send_and_wait(sit,socket,receiver_endpoint,4);
                CmdExitCommandMode exit(pkt_num++);
-               res = send_and_wait(exit,socket,receiver_endpoint);
+               res = send_and_wait(exit,socket,receiver_endpoint,4);
                if (res) {
                    ROS_INFO("%s: Exited command mode",sensor_host.c_str());
                }
 
                ros::spin();
                CmdDisconnectFromSensor disconnect(pkt_num++);
-               res = send_and_wait(disconnect,socket,receiver_endpoint);
+               res = send_and_wait(disconnect,socket,receiver_endpoint,4);
                ROS_INFO("Disconnected");
            } catch (std::exception& e) {
                ROS_ERROR("%s: Exception %s",sensor_host.c_str(),e.what());
