@@ -25,15 +25,22 @@ class LxSDriver {
     protected:
         bool connected;
         ros::Publisher scan_pub;
+        ros::Timer timer;
         std::string sensor_host;
         std::string sensor_port;
         int host_port;
         std::string base_frame;
         double wait_timeout;
+        double rate_control;
         bool trigger_input;
         bool cascade_output;
         int debug;
+        unsigned int pkt_num;
+        bool activate_trigger;
         static boost::asio::io_service io_service;
+
+        boost::shared_ptr<udp::endpoint> receiver_endpoint;
+        boost::shared_ptr<udp::socket> send_socket;
 
         template <class iterator> 
             void dump_buf(iterator begin, const iterator & end, const std::string & prefix) {
@@ -169,7 +176,7 @@ class LxSDriver {
         }
 
         template <class datagram>
-            int send(const datagram & dg,udp::socket & socket, udp::endpoint & ep) {
+            int send(const datagram & dg) {
                 std::vector<uint8_t> send_buf(dg.serialized_length());
                 dg.serialize(send_buf.begin(),send_buf.end());
                 if (debug) {
@@ -177,11 +184,11 @@ class LxSDriver {
                     dump_buf(send_buf.begin(),send_buf.end(),sensor_host);
                 }
 
-                return socket.send_to(boost::asio::buffer(send_buf), ep);
+                return send_socket->send_to(boost::asio::buffer(send_buf), *receiver_endpoint);
             }
 
         template <class datagram>
-            bool send_and_wait(const datagram & dg,udp::socket & socket, udp::endpoint & ep, unsigned int num_retries=0) {
+            bool send_and_wait(const datagram & dg, unsigned int num_retries=0) {
                 std::vector<uint8_t> send_buf(dg.serialized_length());
                 dg.serialize(send_buf.begin(),send_buf.end());
                 if (debug) {
@@ -195,7 +202,7 @@ class LxSDriver {
                     std::unique_lock<std::mutex> lk(receiveMtx);
                     waitingList.insert(LxS::LXS_RESP_ACK_FAILURE);
                     waitingList.insert(resp_cmd);
-                    socket.send_to(boost::asio::buffer(send_buf), ep);
+                    send_socket->send_to(boost::asio::buffer(send_buf), *receiver_endpoint);
                     std::chrono::duration<double> timeout(wait_timeout);
                     std::cv_status wstatus = receiveCond.wait_for(lk, timeout);
                     waitingList.clear();
@@ -216,9 +223,19 @@ class LxSDriver {
                 return false;
             }
 
+        void triggerCallback(const ros::TimerEvent&) {
+            if (!activate_trigger) {
+                return;
+            }
+            CmdEthernetTrigger trigger(pkt_num++);
+            send(trigger);
+        }
+
     public: 
-       LxSDriver(ros::NodeHandle & nh) {
-           connected = false;
+        LxSDriver(ros::NodeHandle & nh) {
+            connected = false;
+            pkt_num = 1;
+            activate_trigger = false;
             nh.param("base_frame",base_frame,std::string("lrs36"));
             nh.param("sensor_host",sensor_host,std::string("192.168.60.3"));
             nh.param("sensor_port",sensor_port,std::string("9008"));
@@ -226,21 +243,30 @@ class LxSDriver {
             nh.param("wait_timeout",wait_timeout,0.5);
             nh.param("trigger_input",trigger_input,false);
             nh.param("cascade_output",cascade_output,false);
+            nh.param("rate_control",rate_control,-1.0);
+            if (rate_control > 100) {
+                ROS_WARN("Rate control (%f) cannot be larger than 100",rate_control);
+                rate_control = 100;
+            }
             nh.param("debug",debug,0);
             scan_pub = nh.advertise<sensor_msgs::PointCloud2>("scans",1);
-       }
+            if (rate_control>0) {
+                timer = nh.createTimer(ros::Duration(1./rate_control), &LxSDriver::triggerCallback,this);
+            }
+        }
 
        void run() {
            udp::resolver resolver(io_service);
            udp::resolver::query query(udp::v4(), sensor_host,sensor_port);
-           udp::endpoint receiver_endpoint = *resolver.resolve(query);
+           receiver_endpoint.reset(new udp::endpoint(*resolver.resolve(query)));
 
-           udp::socket socket(io_service);
-           socket.open(udp::v4());
+
+           send_socket.reset(new udp::socket(io_service));
+           send_socket->open(udp::v4());
 
            receiveThread = new std::thread(&LxSDriver::recv_thread,this);
 
-           unsigned int pkt_num = 1;
+           pkt_num = 1;
            bool res = false;
 
            connected = false;
@@ -250,47 +276,55 @@ class LxSDriver {
                    ros::spinOnce();
                    ROS_INFO("Connecting to %s:%s",sensor_host.c_str(),sensor_port.c_str());
                    CmdConnectToSensor connect(pkt_num++);
-                   res = send_and_wait(connect,socket,receiver_endpoint,4);
+                   res = send_and_wait(connect,4);
                    if (res) {
                        connected = true;
                        ROS_INFO("Connected to %s",sensor_host.c_str());
                        break;
                    }
                    CmdDisconnectFromSensor disconnect(pkt_num++);
-                   res = send_and_wait(disconnect,socket,receiver_endpoint);
+                   res = send_and_wait(disconnect);
                    ros::Duration(1).sleep();
                }
                if (!connected && !ros::ok()) {
                    return;
                }
                CmdEnterCommandMode enter(pkt_num++);
-               res = send_and_wait(enter,socket,receiver_endpoint,4);
+               res = send_and_wait(enter,4);
                if (res) {
                    ROS_INFO("%s: Entered command mode",sensor_host.c_str());
                }
                CmdGetParameterSet pget(0,pkt_num++);
-               res = send_and_wait(pget,socket,receiver_endpoint,4);
+               res = send_and_wait(pget,4);
                if (res) {
                    assert(response && (response->cmd == LXS_RESP_GET_PARAMETER_SET));
                    std::shared_ptr<RespParameterSet> resp = std::dynamic_pointer_cast<RespParameterSet>(response);
                    CmdSetTaskParameterSet pset(*resp,pkt_num++);
-                   pset.enable_trigger = trigger_input;
+                   if (rate_control>0) {
+                       pset.enable_trigger = true;
+                   } else {
+                       pset.enable_trigger = trigger_input;
+                   }
                    pset.enable_cascading = cascade_output;
                    pset.print(sensor_host);
                    pset.sync();
-                   res = send_and_wait(pset,socket,receiver_endpoint,4);
+                   res = send_and_wait(pset,4);
                }
                CmdSetInspectionTask sit(0,true,pkt_num++);
-               res = send_and_wait(sit,socket,receiver_endpoint,4);
+               res = send_and_wait(sit,4);
                CmdExitCommandMode exit(pkt_num++);
-               res = send_and_wait(exit,socket,receiver_endpoint,4);
+               res = send_and_wait(exit,4);
                if (res) {
                    ROS_INFO("%s: Exited command mode",sensor_host.c_str());
                }
 
+               if (rate_control>0) {
+                   activate_trigger = true;
+               }
                ros::spin();
+               activate_trigger = false;
                CmdDisconnectFromSensor disconnect(pkt_num++);
-               res = send_and_wait(disconnect,socket,receiver_endpoint,4);
+               res = send_and_wait(disconnect,4);
                ROS_INFO("Disconnected");
            } catch (std::exception& e) {
                ROS_ERROR("%s: Exception %s",sensor_host.c_str(),e.what());
@@ -298,6 +332,8 @@ class LxSDriver {
 
            delete receiveThread;
            receiveThread = NULL;
+           send_socket.reset();
+           receiver_endpoint.reset();
        }
 
 };
