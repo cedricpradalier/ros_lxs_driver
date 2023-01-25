@@ -10,6 +10,7 @@
 #include <boost/array.hpp>
 #include <boost/asio.hpp>
 
+#include <std_msgs/Header.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_ros/point_cloud.h>
 #include <pcl_ros/transforms.h>
@@ -25,6 +26,7 @@ class LxSDriver {
     protected:
         bool connected;
         ros::Publisher scan_pub;
+        ros::Subscriber trig_sub;
         ros::Timer timer;
         std::string sensor_host;
         std::string sensor_port;
@@ -34,6 +36,7 @@ class LxSDriver {
         double rate_control;
         bool trigger_input;
         bool cascade_output;
+        bool ros_trigger;
         int debug;
         unsigned int pkt_num;
         bool activate_trigger;
@@ -231,6 +234,14 @@ class LxSDriver {
             send(trigger);
         }
 
+        void triggerMessage(const std_msgs::HeaderConstPtr&) {
+            if (!activate_trigger) {
+                return;
+            }
+            CmdEthernetTrigger trigger(pkt_num++);
+            send(trigger);
+        }
+
     public: 
         LxSDriver(ros::NodeHandle & nh) {
             connected = false;
@@ -242,6 +253,7 @@ class LxSDriver {
             nh.param("host_port",host_port,5634);
             nh.param("wait_timeout",wait_timeout,0.5);
             nh.param("trigger_input",trigger_input,false);
+            nh.param("ros_trigger",ros_trigger,false);
             nh.param("cascade_output",cascade_output,false);
             nh.param("rate_control",rate_control,-1.0);
             if (rate_control > 100) {
@@ -252,6 +264,9 @@ class LxSDriver {
             scan_pub = nh.advertise<sensor_msgs::PointCloud2>("scans",1);
             if (rate_control>0) {
                 timer = nh.createTimer(ros::Duration(1./rate_control), &LxSDriver::triggerCallback,this);
+            }
+            if (ros_trigger) {
+                trig_sub = nh.subscribe("trigger",1,&LxSDriver::triggerMessage,this);
             }
         }
 
@@ -300,11 +315,7 @@ class LxSDriver {
                    assert(response && (response->cmd == LXS_RESP_GET_PARAMETER_SET));
                    std::shared_ptr<RespParameterSet> resp = std::dynamic_pointer_cast<RespParameterSet>(response);
                    CmdSetTaskParameterSet pset(*resp,pkt_num++);
-                   if (rate_control>0) {
-                       pset.enable_trigger = true;
-                   } else {
-                       pset.enable_trigger = trigger_input;
-                   }
+                   pset.enable_trigger = trigger_input || ros_trigger || (rate_control>0);
                    pset.enable_cascading = cascade_output;
                    pset.print(sensor_host);
                    pset.sync();

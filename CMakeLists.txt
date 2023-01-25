@@ -149,6 +149,9 @@ target_link_libraries(test_lxs lxs_lib ${Boost_ASIO_LIBRARY} ${Boost_SYSTEM_LIBR
 add_executable(ros_lxs_driver src/ros_lxs_driver.cpp)
 target_link_libraries(ros_lxs_driver lxs_lib ${catkin_LIBRARIES} ${Boost_ASIO_LIBRARY} ${Boost_SYSTEM_LIBRARY} pthread)
 
+add_executable(sync_trigger src/sync_trigger.cpp)
+target_link_libraries(sync_trigger ${catkin_LIBRARIES} ${Boost_ASIO_LIBRARY} ${Boost_SYSTEM_LIBRARY} pthread)
+
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
