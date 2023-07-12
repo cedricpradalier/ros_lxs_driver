@@ -329,7 +329,7 @@ class LxSDriver {
                    ROS_INFO("%s: Exited command mode",sensor_host.c_str());
                }
 
-               if (rate_control>0) {
+               if ((rate_control>0) || ros_trigger) {
                    activate_trigger = true;
                }
                ros::spin();
