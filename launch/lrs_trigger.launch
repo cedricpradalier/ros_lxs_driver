@@ -33,7 +33,9 @@
     <node name="sync_trigger" pkg="ros_lxs_driver" type="sync_trigger" output="screen">
         <param name="num_publisher" value="2"/>
         <param name="rate" value="100"/>
+        <param name="divider" value="10"/>
         <remap from="~/trigger0" to="/lrs36_1/trigger"/>
         <remap from="~/trigger1" to="/lrs36_2/trigger"/>
+        <remap from="~/trigger0_div" to="/camera/trigger"/>
     </node>
 </launch>
